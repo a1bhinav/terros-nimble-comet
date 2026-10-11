@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { TaskView } from "../../shared/types";
+import type { TaskResponse, TaskView } from "../../shared/types";
+import { api } from "../api/client";
 import { TaskList } from "./TaskList";
 
 const task: TaskView = {
@@ -17,6 +18,33 @@ const task: TaskView = {
   assignee: { id: "u-marcus", name: "Marcus Bell" },
   team: { id: "team-north", name: "North Metro" },
 };
+
+const otherTask: TaskView = { ...task, id: "task-2", title: "Send revised proposal" };
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function completed(task: TaskView): TaskResponse {
+  return { task: { ...task, status: "completed", completedAt: "2026-03-10T15:00:00.000Z", isOverdue: false } };
+}
+
+function actionButton(task: TaskView) {
+  return within(screen.getByRole("row", { name: new RegExp(task.title) })).getByRole("button");
+}
+
+function mockTaskActions() {
+  const completions = new Map([task, otherTask].map((task) => [task.id, deferred<TaskResponse>()]));
+  const listTasks = vi.spyOn(api, "listTasks").mockResolvedValue({ tasks: [task, otherTask] });
+  const completeTask = vi.spyOn(api, "completeTask").mockImplementation((id) => completions.get(id)!.promise);
+  return { completions, listTasks, completeTask };
+}
 
 function mockFetch(body: unknown, status = 200) {
   const fetchMock = vi.fn().mockResolvedValue(
@@ -73,6 +101,91 @@ describe("TaskList", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
 
     expect(await screen.findByText("Confirm install date")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([task, otherTask])("keeps the other action pending when $title succeeds first", async (first) => {
+    const remaining = first.id === task.id ? otherTask : task;
+    const { completions, listTasks, completeTask } = mockTaskActions();
+    const user = userEvent.setup();
+    render(<TaskList view="all" status="open" />);
+    await screen.findByText(task.title);
+
+    await user.click(actionButton(task));
+    await user.click(actionButton(otherTask));
+
+    for (const pending of [task, otherTask]) {
+      expect(actionButton(pending)).toHaveProperty("disabled", true);
+      expect(actionButton(pending)).toHaveProperty("textContent", "Saving…");
+      await user.click(actionButton(pending));
+    }
+    expect(completeTask).toHaveBeenCalledTimes(2);
+    expect(completeTask).toHaveBeenNthCalledWith(1, task.id);
+    expect(completeTask).toHaveBeenNthCalledWith(2, otherTask.id);
+
+    listTasks.mockResolvedValue({ tasks: [remaining] });
+    await act(async () => {
+      completions.get(first.id)!.resolve(completed(first));
+    });
+
+    expect(screen.queryByText(first.title)).toBeNull();
+    expect(actionButton(remaining)).toHaveProperty("disabled", true);
+    expect(actionButton(remaining)).toHaveProperty("textContent", "Saving…");
+    expect(listTasks).toHaveBeenCalledTimes(2);
+
+    listTasks.mockResolvedValue({ tasks: [] });
+    await act(async () => {
+      completions.get(remaining.id)!.resolve(completed(remaining));
+    });
+
+    expect(screen.getByText("No tasks match these filters.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(listTasks).toHaveBeenCalledTimes(3);
+  });
+
+  it.each([task, otherTask])("releases only $title on failure and allows a successful retry", async (failed) => {
+    const remaining = failed.id === task.id ? otherTask : task;
+    const { completions, listTasks, completeTask } = mockTaskActions();
+    const user = userEvent.setup();
+    render(<TaskList view="all" status="open" />);
+    await screen.findByText(task.title);
+
+    await user.click(actionButton(task));
+    await user.click(actionButton(otherTask));
+    await act(async () => {
+      completions.get(failed.id)!.reject(new Error("Connection lost"));
+    });
+
+    expect(screen.getByRole("alert").textContent).toBe(`Could not complete "${failed.title}": Connection lost`);
+    expect(actionButton(failed)).toHaveProperty("disabled", false);
+    expect(actionButton(failed)).toHaveProperty("textContent", "Mark complete");
+    expect(actionButton(remaining)).toHaveProperty("disabled", true);
+    expect(actionButton(remaining)).toHaveProperty("textContent", "Saving…");
+    expect(listTasks).toHaveBeenCalledTimes(1);
+
+    const retry = deferred<TaskResponse>();
+    completeTask.mockReturnValueOnce(retry.promise);
+    await user.click(actionButton(failed));
+
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(actionButton(failed)).toHaveProperty("disabled", true);
+    expect(actionButton(remaining)).toHaveProperty("disabled", true);
+    expect(completeTask).toHaveBeenCalledTimes(3);
+    expect(completeTask).toHaveBeenLastCalledWith(failed.id);
+
+    listTasks.mockResolvedValue({ tasks: [remaining] });
+    await act(async () => {
+      retry.resolve(completed(failed));
+    });
+
+    expect(screen.queryByText(failed.title)).toBeNull();
+    expect(actionButton(remaining)).toHaveProperty("disabled", true);
+    listTasks.mockResolvedValue({ tasks: [] });
+    await act(async () => {
+      completions.get(remaining.id)!.resolve(completed(remaining));
+    });
+
+    expect(screen.getByText("No tasks match these filters.")).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 });

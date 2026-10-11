@@ -26,11 +26,11 @@ export function TaskList({ view, repId, status }: TaskListProps) {
     },
     [view, repId, status],
   );
-  const [pendingTaskId, setPendingTaskId] = useState<string | null>(null);
+  const [pendingTaskIds, setPendingTaskIds] = useState<Set<string>>(() => new Set());
   const [actionError, setActionError] = useState<string | null>(null);
 
   async function completeTask(task: TaskView) {
-    setPendingTaskId(task.id);
+    setPendingTaskIds((ids) => new Set(ids).add(task.id));
     setActionError(null);
     try {
       await api.completeTask(task.id);
@@ -38,7 +38,11 @@ export function TaskList({ view, repId, status }: TaskListProps) {
     } catch (error) {
       setActionError(`Could not complete "${task.title}": ${error instanceof Error ? error.message : String(error)}`);
     } finally {
-      setPendingTaskId(null);
+      setPendingTaskIds((ids) => {
+        const remaining = new Set(ids);
+        remaining.delete(task.id);
+        return remaining;
+      });
     }
   }
 
@@ -78,7 +82,7 @@ export function TaskList({ view, repId, status }: TaskListProps) {
       <p className="muted">
         {rows.length} {rows.length === 1 ? "task" : "tasks"}
       </p>
-      <TaskTable tasks={rows} pendingTaskId={pendingTaskId} onComplete={completeTask} />
+      <TaskTable tasks={rows} pendingTaskIds={pendingTaskIds} onComplete={completeTask} />
     </>
   );
 }

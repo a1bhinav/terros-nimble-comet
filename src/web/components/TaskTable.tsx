@@ -3,11 +3,11 @@ import { formatDue } from "../format";
 
 interface TaskTableProps {
   tasks: TaskView[];
-  pendingTaskId: string | null;
+  pendingTaskIds: ReadonlySet<string>;
   onComplete: (task: TaskView) => void;
 }
 
-export function TaskTable({ tasks, pendingTaskId, onComplete }: TaskTableProps) {
+export function TaskTable({ tasks, pendingTaskIds, onComplete }: TaskTableProps) {
   return (
     <table className="task-table">
       <thead>
@@ -37,8 +37,8 @@ export function TaskTable({ tasks, pendingTaskId, onComplete }: TaskTableProps) 
             </td>
             <td className="actions">
               {task.status === "open" && (
-                <button type="button" onClick={() => onComplete(task)} disabled={pendingTaskId === task.id}>
-                  {pendingTaskId === task.id ? "Saving…" : "Mark complete"}
+                <button type="button" onClick={() => onComplete(task)} disabled={pendingTaskIds.has(task.id)}>
+                  {pendingTaskIds.has(task.id) ? "Saving…" : "Mark complete"}
                 </button>
               )}
             </td>
