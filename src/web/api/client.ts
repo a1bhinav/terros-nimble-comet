@@ -32,14 +32,29 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Authorization", `Bearer ${sessionToken}`);
   }
 
-  const response = await fetch(path, { ...init, headers });
-  const body = await response.json().catch(() => null);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch(path, { ...init, headers, signal: controller.signal });
+    const body = await response.json().catch((error: unknown) => {
+      // Preserve the JSON fallback without swallowing a timeout during body reading.
+      if (controller.signal.aborted) throw error;
+      return null;
+    });
 
-  if (!response.ok) {
-    const error = (body as ApiErrorBody | null)?.error;
-    throw new ApiError(response.status, error?.code ?? "http_error", error?.message ?? `Request failed (${response.status})`);
+    if (!response.ok) {
+      const error = (body as ApiErrorBody | null)?.error;
+      throw new ApiError(response.status, error?.code ?? "http_error", error?.message ?? `Request failed (${response.status})`);
+    }
+    return body as T;
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error("Request timed out after 10 seconds. Please try again.");
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
   }
-  return body as T;
 }
 
 function withQuery(path: string, params: Record<string, string | undefined>): string {

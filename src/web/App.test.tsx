@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -41,6 +41,56 @@ function summaryRow(name: string) {
   const summary = screen.getByRole("region", { name: "Team summary" });
   return within(summary).getByRole("row", { name: new RegExp(`^${name} `) });
 }
+
+describe("Initial account loading", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    window.localStorage.clear();
+    setSessionToken(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+    window.localStorage.clear();
+    setSessionToken(null);
+  });
+
+  it("shows the timeout error and loads the workspace after retry", async () => {
+    const fetchMock = vi.fn<typeof fetch>()
+      .mockImplementationOnce((_path, init) => new Promise((_resolve, reject) => {
+        const signal = init!.signal!;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ accounts: [
+        { token: "demo-marcus", name: "Marcus", role: "rep", teamName: "North" },
+      ] })))
+      .mockResolvedValueOnce(new Response(JSON.stringify(rep)))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ tasks: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<App />);
+
+    expect(screen.getByRole("status").textContent).toBe("Connecting…");
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+
+    expect(screen.getByRole("alert").textContent).toContain("Request timed out after 10 seconds. Please try again.");
+    expect(screen.queryByText("Connecting…")).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Try again" })); });
+
+    expect(screen.getByText("My follow-ups")).toBeTruthy();
+    expect(screen.getByText("No tasks match these filters.")).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/demo-accounts", "/api/demo-accounts", "/api/me", "/api/tasks?status=open",
+    ]);
+    // Flush jsdom's zero-delay storage event from saving the selected account.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
 
 describe("Manager summary", () => {
   let tasks: TaskView[];

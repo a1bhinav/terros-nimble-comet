@@ -47,7 +47,7 @@ export function App() {
         )}
         {accounts.status === "error" && (
           <div className="state state-error" role="alert">
-            <p>Could not reach the API. Is the server running?</p>
+            <p>Could not reach the API. Is the server running? {accounts.error.message}</p>
             <button type="button" onClick={accounts.reload}>
               Try again
             </button>
