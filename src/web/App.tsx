@@ -4,6 +4,7 @@ import type { TaskStatus } from "../shared/types";
 import { api, setSessionToken } from "./api/client";
 import { AccountSwitcher } from "./components/AccountSwitcher";
 import { RepFilter } from "./components/RepFilter";
+import { RepTaskSummary } from "./components/RepTaskSummary";
 import { TaskList, type TaskListView } from "./components/TaskList";
 import { useAsync } from "./hooks/useAsync";
 import { loadSavedToken, saveToken } from "./session";
@@ -62,6 +63,7 @@ function Workspace() {
   const me = useAsync(() => api.currentUser(), []);
   const isManager = me.status === "success" && me.data.user.role === "manager";
   const reps = useAsync(async () => (isManager ? (await api.teamReps()).reps : []), [isManager]);
+  const summary = useAsync(async () => (isManager ? (await api.listTasks({ status: "open" })).tasks : null), [isManager]);
 
   const [view, setView] = useState<TaskListView>("all");
   const [repId, setRepId] = useState("");
@@ -86,6 +88,7 @@ function Workspace() {
   }
 
   const teamNames = me.data.teams.map((team) => team.name).join(", ");
+  const summaryError = reps.status === "error" ? reps.error : summary.status === "error" ? summary.error : null;
 
   return (
     <section>
@@ -106,6 +109,36 @@ function Workspace() {
         </nav>
       </div>
 
+      {isManager && (
+        <section aria-labelledby="rep-summary-heading">
+          <h3 id="rep-summary-heading">Team summary</h3>
+          {summaryError ? (
+            <div className="state state-error" role="alert">
+              <p>Could not load team summary. {summaryError.message}</p>
+              <button type="button" onClick={() => {
+                reps.reload();
+                summary.reload();
+              }}>
+                Try again
+              </button>
+            </div>
+          ) : reps.status === "success" && summary.status === "success" && summary.data !== null ? (
+            <RepTaskSummary
+              reps={reps.data}
+              tasks={summary.data}
+              selectedRepId={repId}
+              onSelectRep={(id) => {
+                setRepId(id);
+                setView("all");
+                setStatus("open");
+              }}
+            />
+          ) : (
+            <p className="state" role="status">Loading team summary…</p>
+          )}
+        </section>
+      )}
+
       <div className="filters">
         {isManager && reps.status === "success" && <RepFilter reps={reps.data} value={repId} onChange={setRepId} />}
         {view === "all" && (
@@ -120,7 +153,12 @@ function Workspace() {
         )}
       </div>
 
-      <TaskList view={view} repId={repId || undefined} status={status || undefined} />
+      <TaskList
+        view={view}
+        repId={repId || undefined}
+        status={status || undefined}
+        onTaskCompleted={isManager ? summary.reload : undefined}
+      />
     </section>
   );
 }
