@@ -11,6 +11,7 @@ const referenceTime = new Date("2026-03-10T15:00:00.000Z");
 
 describe("TaskService", () => {
   let directory: FixtureDirectoryRepository;
+  let taskRepository: FixtureTaskRepository;
   let service: TaskService;
 
   async function contextFor(userId: string): Promise<RequestContext> {
@@ -21,10 +22,10 @@ describe("TaskService", () => {
   beforeEach(() => {
     const data = createFixtureData(referenceTime);
     directory = new FixtureDirectoryRepository(data);
-    const tasks = new FixtureTaskRepository(data);
+    taskRepository = new FixtureTaskRepository(data);
     const clock = fixedClock(referenceTime);
-    const queries = new TaskQueryEngine(createTaskQueryRegistry(), new TaskScopeResolver(directory), tasks, clock);
-    service = new TaskService(tasks, directory, queries, clock);
+    const queries = new TaskQueryEngine(createTaskQueryRegistry(), new TaskScopeResolver(directory), taskRepository, clock);
+    service = new TaskService(taskRepository, directory, queries, clock);
   });
 
   it("lists every task on the manager's team, ordered by due time", async () => {
@@ -55,11 +56,51 @@ describe("TaskService", () => {
     expect(tasks.every((task) => task.isOverdue)).toBe(true);
   });
 
-  it("completes a task and records the completion time", async () => {
-    const task = await service.completeTask(await contextFor("u-dana"), "task-1006");
+  it.each([
+    ["u-dana", "u-alicia", "task-1004"],
+    ["u-dana", "u-marcus", "task-1001"],
+    ["u-marcus", "u-marcus", "task-1001"],
+  ])("narrows %s's overdue list to visible rep %s", async (userId, repId, taskId) => {
+    const tasks = await service.listOverdueTasks(await contextFor(userId), { repId });
+
+    expect(tasks.map((task) => task.id)).toEqual([taskId]);
+    expect(tasks.every((task) => task.assignee.id === repId && task.isOverdue)).toBe(true);
+  });
+
+  it.each([
+    ["u-dana", "u-kai"],
+    ["u-dana", "u-missing"],
+    ["u-dana", "u-dana"],
+    ["u-marcus", "u-alicia"],
+    ["u-marcus", "u-kai"],
+  ])("rejects %s's overdue filter for unauthorized rep %s", async (userId, repId) => {
+    await expect(service.listOverdueTasks(await contextFor(userId), { repId })).rejects.toMatchObject({
+      code: "forbidden",
+    });
+  });
+
+  it.each([
+    ["u-dana", "task-1006"],
+    ["u-marcus", "task-1001"],
+  ])("allows %s to complete visible task %s and records the completion time", async (userId, taskId) => {
+    const task = await service.completeTask(await contextFor(userId), taskId);
 
     expect(task.status).toBe("completed");
     expect(task.completedAt).toBe(referenceTime.toISOString());
     expect(task.isOverdue).toBe(false);
+  });
+
+  it.each([
+    ["u-marcus", "task-1004"],
+    ["u-marcus", "task-1005"],
+    ["u-marcus", "task-3001"],
+    ["u-dana", "task-3001"],
+  ])("rejects %s completing invisible task %s without changing it", async (userId, taskId) => {
+    const original = await taskRepository.findTaskById(taskId);
+
+    await expect(service.completeTask(await contextFor(userId), taskId)).rejects.toMatchObject({
+      code: "not_found",
+    });
+    expect(await taskRepository.findTaskById(taskId)).toEqual(original);
   });
 });
