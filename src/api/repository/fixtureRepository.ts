@@ -1,3 +1,4 @@
+import { ConflictError } from "../domain/errors";
 import type { FixtureData } from "../fixtures/data";
 import type {
   DirectoryRepository,
@@ -38,6 +39,10 @@ export class FixtureTaskRepository implements TaskRepository {
     const task = this.tasks.find((candidate) => candidate.id === id);
     if (!task) {
       throw new Error(`Task ${id} does not exist`);
+    }
+    // Keep this check and mutation synchronous so only one completion can win.
+    if (changes.status === "completed" && task.status === "completed") {
+      throw new ConflictError(`Task ${id} is already completed`);
     }
     Object.assign(task, changes);
     return { ...task };

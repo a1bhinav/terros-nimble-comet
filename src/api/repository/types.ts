@@ -43,6 +43,7 @@ export interface TaskQuery {
 export interface TaskRepository {
   findTasks(query: TaskQuery): Promise<Task[]>;
   findTaskById(id: string): Promise<Task | undefined>;
+  /** Setting status to "completed" must atomically reject already-completed tasks with ConflictError. */
   updateTask(id: string, changes: Partial<Pick<Task, "status" | "completedAt">>): Promise<Task>;
 }
 
